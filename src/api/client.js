@@ -7,7 +7,10 @@ function unwrap(payload) {
   if (payload && payload.success) {
     return payload.data;
   }
-  const message = payload?.message || payload?.error?.message || "Có lỗi xảy ra. Vui lòng thử lại.";
+  let message = payload?.message || payload?.error?.message || "Có lỗi xảy ra. Vui lòng thử lại.";
+  if (/must be a future date/i.test(message)) {
+    message = "Khung giờ đã qua. Hãy chọn ngày làm việc tiếp theo.";
+  }
   const error = new Error(message);
   error.code = payload?.code || payload?.error?.code;
   throw error;

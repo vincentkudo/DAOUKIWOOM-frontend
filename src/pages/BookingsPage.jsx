@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { api } from "../api/client";
+import { formatDateTime, formatTime } from "../lib/datetime";
+
+const STATUS = {
+  CONFIRMED: "Đã xác nhận",
+  CANCELLED: "Đã hủy",
+};
 
 export default function BookingsPage() {
   const { token } = useAuth();
@@ -44,12 +50,11 @@ export default function BookingsPage() {
             <div>
               <strong>{b.title}</strong>
               <small>
-                {b.room.name} · {b.attendeeCount}/{b.room.capacity} người ·{" "}
-                {new Date(b.startAt).toLocaleString("vi-VN")} – {new Date(b.endAt).toLocaleTimeString("vi-VN")}
+                {b.room.name} · {b.attendeeCount}/{b.room.capacity} người · {formatDateTime(b.startAt)} – {formatTime(b.endAt)}
               </small>
             </div>
             <div className="row">
-              <span className={`fit ${b.status === "CONFIRMED" ? "tight" : "spacious"}`}>{b.status}</span>
+              <span className={`fit ${b.status === "CONFIRMED" ? "good" : "spacious"}`}>{STATUS[b.status] || b.status}</span>
               {b.status === "CONFIRMED" && new Date(b.startAt) > new Date() ? (
                 <button type="button" className="btn ghost" onClick={() => cancel(b.id)}>Hủy</button>
               ) : null}

@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { amenityLabel, api } from "../api/client";
+import Select from "../components/Select";
+
+const STATUS_OPTIONS = [
+  { value: "ACTIVE", label: "Đang dùng" },
+  { value: "INACTIVE", label: "Ngưng" },
+];
+
+const STATUS_LABEL = Object.fromEntries(STATUS_OPTIONS.map((item) => [item.value, item.label]));
 
 const EMPTY = {
   code: "",
@@ -76,13 +84,12 @@ export default function RoomsPage() {
           <label>Vị trí<input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} required /></label>
           <label>Sức chứa (số người)<input type="number" min="1" max="200" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: Number(e.target.value) })} required /></label>
           <label>Mô tả<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
-          <label>
-            Trạng thái
-            <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-              <option value="ACTIVE">Đang dùng</option>
-              <option value="INACTIVE">Ngưng</option>
-            </select>
-          </label>
+          <Select
+            label="Trạng thái"
+            value={form.status}
+            options={STATUS_OPTIONS}
+            onChange={(status) => setForm({ ...form, status })}
+          />
           <div className="chips clickable">
             {AMENITIES.map((a) => (
               <button type="button" key={a} className={form.amenities.includes(a) ? "on" : ""} onClick={() => toggleAmenity(a)}>
@@ -105,7 +112,7 @@ export default function RoomsPage() {
             <article className="card booking-row" key={room.id}>
               <div>
                 <strong>{room.name} · {room.capacity} người</strong>
-                <small>{room.code} · Tầng {room.floor} · {room.status}</small>
+                <small>{room.code} · Tầng {room.floor} · {STATUS_LABEL[room.status] || room.status}</small>
               </div>
               <button
                 type="button"

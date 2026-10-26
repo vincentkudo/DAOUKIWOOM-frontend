@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { api } from "../api/client";
+import { formatDateTime } from "../lib/datetime";
 
 export default function DashboardPage() {
   const { token, user } = useAuth();
@@ -22,9 +23,13 @@ export default function DashboardPage() {
         <div>
           <p className="eyebrow">Xin chào, {user.fullName}</p>
           <h1>Tổng quan đặt phòng</h1>
-          <p className="muted">10 phòng, sức chứa từ 4 đến 30 người. Tìm phòng bắt đầu từ sĩ số cuộc họp.</p>
+          <p className="muted">
+            {activeRooms.length} phòng đang dùng, sức chứa từ{" "}
+            {activeRooms.length ? Math.min(...activeRooms.map((r) => r.capacity)) : "—"} đến{" "}
+            {activeRooms.length ? Math.max(...activeRooms.map((r) => r.capacity)) : "—"} người.
+          </p>
         </div>
-        <Link className="btn primary" to="/find">Tìm phòng theo số người</Link>
+        <Link className="btn primary" to="/find">Tìm phòng</Link>
       </header>
 
       <section className="stats">
@@ -69,7 +74,7 @@ export default function DashboardPage() {
                   <strong>{b.title}</strong>
                   <small>
                     {b.room.name} · {b.attendeeCount}/{b.room.capacity} người ·{" "}
-                    {new Date(b.startAt).toLocaleString("vi-VN")}
+                    {formatDateTime(b.startAt)}
                   </small>
                 </li>
               ))}

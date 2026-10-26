@@ -34,9 +34,9 @@ export default function LoginPage() {
       <section className="login-hero">
         <p className="eyebrow">DAOU KIWOOM · RoomFlow</p>
         <h1>Đặt phòng họp không còn trùng lịch.</h1>
-        <p>
+        <p className="muted">
           Nhân viên chọn số người trước, hệ thống đề xuất phòng vừa sức và còn trống.
-          Ai đặt trước — giữ phòng. Không còn nhắn tin hỏi nhau.
+          Ai đặt trước — giữ phòng.
         </p>
       </section>
       <form className="card login-card" onSubmit={onSubmit}>
