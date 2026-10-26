@@ -15,10 +15,10 @@ export default function Layout() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">RF</span>
+          <span className="brand-mark">R</span>
           <div>
-            <strong>RoomFlow</strong>
-            <small>DAOU KIWOOM</small>
+            <strong className="font-brand">RoomFlow</strong>
+            <small>DAOUKIWOOM</small>
           </div>
         </div>
         <nav>

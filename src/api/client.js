@@ -51,3 +51,10 @@ export const fitTone = {
   GOOD: "good",
   SPACIOUS: "spacious",
 };
+
+export const fitLabel = {
+  PERFECT: "Vừa",
+  TIGHT: "Tốt",
+  GOOD: "Ổn",
+  SPACIOUS: "Rộng",
+};

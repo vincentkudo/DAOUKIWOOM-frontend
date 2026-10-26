@@ -6,12 +6,14 @@ import { formatDateTime } from "../lib/datetime";
 
 export default function DashboardPage() {
   const { token, user } = useAuth();
+  const [summary, setSummary] = useState({ activeCount: 0, minCapacity: null, maxCapacity: null });
   const [rooms, setRooms] = useState([]);
   const [mine, setMine] = useState([]);
 
   useEffect(() => {
-    api("/api/v1/rooms", { token }).then(setRooms).catch(() => setRooms([]));
-    api("/api/v1/bookings/mine", { token }).then(setMine).catch(() => setMine([]));
+    api("/api/v1/rooms/summary", { token }).then(setSummary).catch(() => {});
+    api("/api/v1/rooms?page=0&size=8", { token }).then((data) => setRooms(data.items || [])).catch(() => setRooms([]));
+    api("/api/v1/bookings/mine?page=0&size=5", { token }).then((data) => setMine(data.items || [])).catch(() => setMine([]));
   }, [token]);
 
   const activeRooms = rooms.filter((r) => r.status === "ACTIVE");
@@ -24,9 +26,7 @@ export default function DashboardPage() {
           <p className="eyebrow">Xin chào, {user.fullName}</p>
           <h1>Tổng quan đặt phòng</h1>
           <p className="muted">
-            {activeRooms.length} phòng đang dùng, sức chứa từ{" "}
-            {activeRooms.length ? Math.min(...activeRooms.map((r) => r.capacity)) : "—"} đến{" "}
-            {activeRooms.length ? Math.max(...activeRooms.map((r) => r.capacity)) : "—"} người.
+            {summary.activeCount} phòng đang dùng, sức chứa từ {summary.minCapacity ?? "—"} đến {summary.maxCapacity ?? "—"} người.
           </p>
         </div>
         <Link className="btn primary" to="/find">Tìm phòng</Link>
@@ -35,18 +35,18 @@ export default function DashboardPage() {
       <section className="stats">
         <article className="card stat">
           <small>Phòng đang dùng</small>
-          <strong>{activeRooms.length}</strong>
+          <strong>{summary.activeCount}</strong>
         </article>
         <article className="card stat">
           <small>Sức chứa nhỏ nhất / lớn nhất</small>
           <strong>
-            {activeRooms.length ? Math.min(...activeRooms.map((r) => r.capacity)) : "—"}
+            {summary.minCapacity ?? "—"}
             <span> / </span>
-            {activeRooms.length ? Math.max(...activeRooms.map((r) => r.capacity)) : "—"}
+            {summary.maxCapacity ?? "—"}
           </strong>
         </article>
         <article className="card stat">
-          <small>Lịch sắp tới của bạn</small>
+          <small>Lịch gần nhất của bạn</small>
           <strong>{upcoming.length}</strong>
         </article>
       </section>
@@ -69,7 +69,7 @@ export default function DashboardPage() {
             <p className="muted">Chưa có lịch. Hãy tìm phòng theo số người rồi đặt.</p>
           ) : (
             <ul className="plain-list">
-              {upcoming.slice(0, 5).map((b) => (
+              {upcoming.map((b) => (
                 <li key={b.id}>
                   <strong>{b.title}</strong>
                   <small>

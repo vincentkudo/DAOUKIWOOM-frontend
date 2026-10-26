@@ -1,9 +1,20 @@
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
-import { amenityLabel, api, fitTone } from "../api/client";
+import { amenityLabel, api, fitLabel, fitTone } from "../api/client";
+import DatePicker from "../components/DatePicker";
+import TimePicker from "../components/TimePicker";
 import { ensureFutureWindow, nextWorkdayWindow, toLocalIso } from "../lib/datetime";
+import { overlapsSearch, slotSocketUrl } from "../lib/slotsocket";
 
 const DEFAULT = nextWorkdayWindow();
+const POLL_MS = 4000;
+const SUGGEST_SIZE = 12;
+const AMENITIES = Object.keys(amenityLabel);
+
+function mergeByRoom(current, incoming) {
+  const seen = new Set(current.map((item) => item.room.id));
+  return [...current, ...incoming.filter((item) => !seen.has(item.room.id))];
+}
 
 export default function FindRoomPage() {
   const { token, user } = useAuth();
@@ -11,56 +22,259 @@ export default function FindRoomPage() {
   const [date, setDate] = useState(DEFAULT.date);
   const [start, setStart] = useState(DEFAULT.start);
   const [end, setEnd] = useState(DEFAULT.end);
+  const [amenities, setAmenities] = useState([]);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [bookingRoom, setBookingRoom] = useState(null);
   const [title, setTitle] = useState("");
   const [purpose, setPurpose] = useState("");
-  const [notice, setNotice] = useState(`Mặc định: ${DEFAULT.label}`);
+  const [notice, setNotice] = useState("");
+  const [hold, setHold] = useState(null);
+  const [holdLeft, setHoldLeft] = useState(0);
+  const [live, setLive] = useState(false);
+  const holdRef = useRef(null);
+  const refreshRef = useRef(async () => {});
+  const windowRef = useRef({ start: "", end: "" });
+  const searchedRef = useRef(false);
 
-  const query = useMemo(() => {
-    const params = new URLSearchParams({ attendeeCount: String(attendeeCount) });
-    if (date && start && end) {
-      params.set("startAt", toLocalIso(date, start));
-      params.set("endAt", toLocalIso(date, end));
-    }
-    return params.toString();
-  }, [attendeeCount, date, start, end]);
-
-  function jumpToWorkday() {
-    const next = nextWorkdayWindow();
-    setDate(next.date);
-    setStart(next.start);
-    setEnd(next.end);
-    setNotice(`Đã chuyển sang ${next.label}`);
-    setError("");
-  }
-
-  async function search(event) {
-    event?.preventDefault();
+  async function fetchSuggestions({ silent = false, page = 0, append = false, watchTaken = false } = {}) {
     const slot = ensureFutureWindow(date, start, end);
-    if (slot.adjusted) {
+    if (slot.adjusted && !silent) {
       setDate(slot.date);
       setStart(slot.start);
       setEnd(slot.end);
       setNotice(`Khung giờ đã qua — đã nhảy sang ${slot.label}`);
     }
+    const loaded = result?.page ?? 0;
+    const size = silent ? Math.min(50, (loaded + 1) * SUGGEST_SIZE) : SUGGEST_SIZE;
     const params = new URLSearchParams({ attendeeCount: String(attendeeCount) });
     params.set("startAt", toLocalIso(slot.date, slot.start));
     params.set("endAt", toLocalIso(slot.date, slot.end));
-    setError("");
-    setLoading(true);
+    params.set("page", String(silent ? 0 : page));
+    params.set("size", String(size));
+    amenities.forEach((item) => params.append("amenities", item));
+    if (!silent) {
+      setError("");
+      setLoading(true);
+    }
     try {
       const data = await api(`/api/v1/rooms/suggestions?${params}`, { token });
-      setResult(data);
+      setResult((previous) => {
+        if (watchTaken && previous) {
+          const stillFree = new Set(data.recommended.map((item) => item.room.id));
+          const taken = previous.recommended.filter((item) => !stillFree.has(item.room.id));
+          if (taken.length) {
+            const names = taken.map((item) => item.room.name).join(", ");
+            setNotice(`${names} vừa được người khác giữ hoặc đặt.`);
+          }
+        }
+        if (append && previous) {
+          return {
+            ...data,
+            recommended: mergeByRoom(previous.recommended, data.recommended),
+            held: mergeByRoom(previous.held || [], data.held || []),
+            occupied: mergeByRoom(previous.occupied || [], data.occupied || []),
+            recommendedCount: mergeByRoom(previous.recommended, data.recommended).length,
+          };
+        }
+        return data;
+      });
+      return data;
     } catch (err) {
-      setError(err.message);
-      setResult(null);
+      if (!silent) {
+        setError(err.message);
+        setResult(null);
+      }
+      return null;
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }
+
+  refreshRef.current = () => fetchSuggestions({ silent: true, watchTaken: true });
+  windowRef.current = {
+    start: date && start ? toLocalIso(date, start) : "",
+    end: date && end ? toLocalIso(date, end) : "",
+  };
+
+  async function search(event) {
+    event?.preventDefault();
+    searchedRef.current = true;
+    await fetchSuggestions({ silent: false, page: 0, append: false });
+  }
+
+  useEffect(() => {
+    if (!searchedRef.current) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setNotice("");
+      fetchSuggestions({ silent: true, page: 0, append: false });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [attendeeCount, date, start, end, amenities]);
+
+  function toggleAmenity(value) {
+    setAmenities((current) =>
+      current.includes(value) ? current.filter((item) => item !== value) : [...current, value]
+    );
+  }
+
+  async function loadMore() {
+    if (!result?.hasMore || loading) {
+      return;
+    }
+    await fetchSuggestions({ silent: false, page: (result.page ?? 0) + 1, append: true });
+  }
+
+  async function releaseHold() {
+    const current = holdRef.current;
+    holdRef.current = null;
+    setHold(null);
+    setHoldLeft(0);
+    if (!current?.id) {
+      return;
+    }
+    try {
+      await api(`/api/v1/holds/${current.id}`, { method: "DELETE", token });
+    } catch {
+      /* hold may already expire */
+    }
+  }
+
+  function closeBooking() {
+    releaseHold();
+    setBookingRoom(null);
+    setTitle("");
+    setPurpose("");
+  }
+
+  async function startBooking(item) {
+    const slot = ensureFutureWindow(date, start, end);
+    if (slot.adjusted) {
+      setDate(slot.date);
+      setStart(slot.start);
+      setEnd(slot.end);
+    }
+    setError("");
+    try {
+      const acquired = await api("/api/v1/holds", {
+        method: "POST",
+        token,
+        body: {
+          roomId: item.room.id,
+          startAt: toLocalIso(slot.date, slot.start),
+          endAt: toLocalIso(slot.date, slot.end),
+        },
+      });
+      holdRef.current = acquired;
+      setHold(acquired);
+      setHoldLeft(acquired.remainingSeconds);
+      setBookingRoom(item);
+      setNotice(`Đang giữ ${item.room.name} · còn ${acquired.remainingSeconds}s`);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  useEffect(() => {
+    if (!hold?.id) {
+      return undefined;
+    }
+    const tick = window.setInterval(() => {
+      setHoldLeft((seconds) => {
+        if (seconds <= 1) {
+          window.clearInterval(tick);
+          holdRef.current = null;
+          setHold(null);
+          setBookingRoom(null);
+          setError("Hết thời gian giữ chỗ. Hãy chọn lại phòng.");
+          setNotice("");
+          return 0;
+        }
+        return seconds - 1;
+      });
+    }, 1000);
+    const beat = window.setInterval(() => {
+      const id = holdRef.current?.id;
+      if (!id) {
+        return;
+      }
+      api(`/api/v1/holds/${id}/heartbeat`, { method: "POST", token })
+        .then((fresh) => {
+          holdRef.current = fresh;
+          setHold(fresh);
+          setHoldLeft(fresh.remainingSeconds);
+        })
+        .catch(() => {});
+    }, Math.max(15, (hold.ttlSeconds || 90) / 3) * 1000);
+    return () => {
+      window.clearInterval(tick);
+      window.clearInterval(beat);
+    };
+  }, [hold?.id, hold?.ttlSeconds, token]);
+
+  useEffect(() => () => {
+    const current = holdRef.current;
+    if (current?.id) {
+      api(`/api/v1/holds/${current.id}`, { method: "DELETE", token }).catch(() => {});
+    }
+  }, [token]);
+
+  const watching = result !== null;
+
+  useEffect(() => {
+    if (!watching) {
+      setLive(false);
+      return undefined;
+    }
+    const socket = new WebSocket(slotSocketUrl());
+    let debounce;
+    socket.onopen = () => setLive(true);
+    socket.onclose = () => setLive(false);
+    socket.onerror = () => setLive(false);
+    socket.onmessage = (event) => {
+      let payload;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      const current = windowRef.current;
+      if (!overlapsSearch(payload, current.start, current.end)) {
+        return;
+      }
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => {
+        refreshRef.current();
+      }, 120);
+    };
+    return () => {
+      window.clearTimeout(debounce);
+      socket.close();
+    };
+  }, [watching]);
+
+  useEffect(() => {
+    if (!watching || live) {
+      return undefined;
+    }
+    async function refresh() {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      await refreshRef.current();
+    }
+    const timer = window.setInterval(refresh, POLL_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [watching, live, attendeeCount, date, start, end, token]);
 
   async function book(event) {
     event.preventDefault();
@@ -85,22 +299,18 @@ export default function FindRoomPage() {
           endAt: toLocalIso(slot.date, slot.end),
           attendeeCount,
           attendeeIds: [user.id],
+          holdId: hold?.id,
         },
       });
       const bookedName = bookingRoom.room.name;
+      holdRef.current = null;
+      setHold(null);
+      setHoldLeft(0);
       setBookingRoom(null);
       setTitle("");
       setPurpose("");
       setNotice(`Đã đặt ${bookedName} cho ${attendeeCount} người · ${slot.date} ${slot.start}–${slot.end}`);
-      setLoading(true);
-      try {
-        const params = new URLSearchParams({ attendeeCount: String(attendeeCount) });
-        params.set("startAt", toLocalIso(slot.date, slot.start));
-        params.set("endAt", toLocalIso(slot.date, slot.end));
-        setResult(await api(`/api/v1/rooms/suggestions?${params}`, { token }));
-      } finally {
-        setLoading(false);
-      }
+      await fetchSuggestions({ silent: false, page: 0, append: false });
     } catch (err) {
       setError(err.message);
     }
@@ -113,7 +323,7 @@ export default function FindRoomPage() {
           <p className="eyebrow">Nghiệp vụ cốt lõi</p>
           <h1>Tìm phòng theo số người</h1>
           <p className="muted">
-            Nhập sĩ số trước. RoomFlow chỉ đề xuất phòng còn chỗ và xếp phòng vừa nhất lên đầu.
+            Nhập sĩ số và tiện ích cần có. Chỉ đề xuất phòng còn chỗ, đủ chỗ, đủ tiện ích.
           </p>
         </div>
       </header>
@@ -131,25 +341,28 @@ export default function FindRoomPage() {
             </button>
           </div>
         </div>
-        <label>
-          Ngày
-          <input type="date" value={date} min={DEFAULT.date} onChange={(e) => setDate(e.target.value)} required />
-        </label>
-        <label>
-          Bắt đầu
-          <input type="time" step="900" value={start} onChange={(e) => setStart(e.target.value)} required />
-        </label>
-        <label>
-          Kết thúc
-          <input type="time" step="900" value={end} onChange={(e) => setEnd(e.target.value)} required />
-        </label>
+        <DatePicker label="Ngày" value={date} min={DEFAULT.date} onChange={setDate} />
+        <TimePicker label="Bắt đầu" value={start} onChange={setStart} />
+        <TimePicker label="Kết thúc" value={end} onChange={setEnd} />
         <div className="search-actions">
           <button className="btn primary" disabled={loading} type="submit">
             {loading ? "Đang tìm…" : "Đề xuất phòng"}
           </button>
-          <button className="btn ghost" type="button" onClick={jumpToWorkday}>
-            Ngày làm việc tới · 09:00
-          </button>
+        </div>
+        <div className="search-amenities">
+          <span className="field-label">Phòng phải có</span>
+          <div className="chips clickable">
+            {AMENITIES.map((item) => (
+              <button
+                type="button"
+                key={item}
+                className={amenities.includes(item) ? "on" : ""}
+                onClick={() => toggleAmenity(item)}
+              >
+                {amenityLabel[item]}
+              </button>
+            ))}
+          </div>
         </div>
       </form>
 
@@ -159,31 +372,40 @@ export default function FindRoomPage() {
       {result ? (
         <>
           <section>
-            <h2>Phòng phù hợp còn trống · {result.recommendedCount}</h2>
+            <h2>Phòng phù hợp còn trống · {result.recommended.length}</h2>
+          {result.amenityFallback ? (
+            <p className="banner">Không có phòng đủ tiện ích đã chọn — đây là phòng gần điều kiện nhất còn trống.</p>
+          ) : null}
             <div className="grid">
               {result.recommended.length === 0 ? (
-                <p className="muted">Không còn phòng đủ chỗ cho {attendeeCount} người trong khung giờ này.</p>
+                <p className="muted">
+                  Không còn phòng đủ chỗ
+                  {amenities.length ? " và đủ tiện ích đã chọn" : ""} cho {attendeeCount} người trong khung giờ này.
+                </p>
               ) : (
                 result.recommended.map((item) => (
                   <article key={item.room.id} className="card room-card">
                     <div className="room-card-top">
-                      <div>
-                        <strong>{item.room.name}</strong>
-                        <small>
-                          {item.room.code} · Tầng {item.room.floor} · {item.room.location}
-                        </small>
-                      </div>
-                      <span className={`fit ${fitTone[item.fitLevel]}`}>{item.fitLabel}</span>
+                      <strong>{item.room.name}</strong>
+                      <span className={`fit ${fitTone[item.fitLevel]}`}>{fitLabel[item.fitLevel]}</span>
                     </div>
+                    <small>
+                      {item.room.code} · Tầng {item.room.floor}
+                    </small>
                     <p>
                       Sức chứa <b>{item.room.capacity}</b> · dư {item.unusedSeats} chỗ
                     </p>
                     <div className="chips">
                       {item.room.amenities.map((a) => (
-                        <span key={a}>{amenityLabel[a] || a}</span>
+                        <span key={a} className={amenities.includes(a) ? "on" : ""}>
+                          {amenityLabel[a] || a}
+                        </span>
                       ))}
                     </div>
-                    <button type="button" className="btn primary" onClick={() => setBookingRoom(item)}>
+                    {item.missingAmenities?.length ? (
+                      <p className="muted">Thiếu {item.missingAmenities.map((a) => amenityLabel[a] || a).join(", ")}</p>
+                    ) : null}
+                    <button type="button" className="btn primary" onClick={() => startBooking(item)}>
                       Đặt phòng này
                     </button>
                   </article>
@@ -199,7 +421,7 @@ export default function FindRoomPage() {
                 {result.held.map((item) => (
                   <article key={item.room.id} className="card room-card">
                     <strong>{item.room.name}</strong>
-                    <small>{item.fitLabel}</small>
+                    <span className={`fit ${fitTone[item.fitLevel]}`}>{fitLabel[item.fitLevel]}</span>
                     <p>Còn {item.holdRemainingSeconds}s giữ chỗ.</p>
                   </article>
                 ))}
@@ -214,23 +436,30 @@ export default function FindRoomPage() {
                 {result.occupied.map((item) => (
                   <article key={item.room.id} className="card room-card">
                     <strong>{item.room.name}</strong>
-                    <small>{item.fitLabel}</small>
+                    <span className={`fit ${fitTone[item.fitLevel]}`}>{fitLabel[item.fitLevel]}</span>
                     <p>Khung giờ này đã có lịch khác.</p>
                   </article>
                 ))}
               </div>
             </section>
           ) : null}
+
+          {result.hasMore ? (
+            <button type="button" className="btn ghost" disabled={loading} onClick={loadMore}>
+              {loading ? "Đang tải…" : "Tải thêm phòng"}
+            </button>
+          ) : null}
         </>
       ) : null}
 
       {bookingRoom ? (
-        <div className="modal" onClick={() => setBookingRoom(null)}>
+        <div className="modal" onClick={closeBooking}>
           <form className="card modal-card" onClick={(e) => e.stopPropagation()} onSubmit={book}>
             <h3>Đặt {bookingRoom.room.name}</h3>
             <p className="muted">
-              {attendeeCount} người · {date} · {start}–{end} · {bookingRoom.fitLabel}
+              {attendeeCount} người · {date} · {start}–{end} · {fitLabel[bookingRoom.fitLevel]}
             </p>
+            {holdLeft > 0 ? <p className="banner success">Đang giữ phòng · còn {holdLeft}s</p> : null}
             <label>
               Tiêu đề cuộc họp
               <input value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={160} />
@@ -240,7 +469,7 @@ export default function FindRoomPage() {
               <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={400} />
             </label>
             <div className="row end">
-              <button type="button" className="btn ghost" onClick={() => setBookingRoom(null)}>
+              <button type="button" className="btn ghost" onClick={closeBooking}>
                 Hủy
               </button>
               <button type="submit" className="btn primary">

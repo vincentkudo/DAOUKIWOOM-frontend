@@ -30,7 +30,7 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
+      <Route path="/login" element={user ? <Navigate to={user.role === "ADMIN" ? "/rooms" : "/"} replace /> : <LoginPage />} />
       <Route
         element={
           <Guard>

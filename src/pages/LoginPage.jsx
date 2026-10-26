@@ -7,11 +7,15 @@ const DEMOS = [
   { label: "Nhân viên", email: "linh.tran@daoukiwoom.vn", password: "Emp123!" },
 ];
 
+function homeFor(user) {
+  return user?.role === "ADMIN" ? "/rooms" : "/";
+}
+
 export default function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState(DEMOS[1].email);
-  const [password, setPassword] = useState(DEMOS[1].password);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -20,8 +24,8 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
-      navigate("/");
+      const user = await login(email, password);
+      navigate(homeFor(user));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -31,23 +35,35 @@ export default function LoginPage() {
 
   return (
     <div className="login-wrap">
-      <section className="login-hero">
-        <p className="eyebrow">DAOU KIWOOM · RoomFlow</p>
-        <h1>Đặt phòng họp không còn trùng lịch.</h1>
-        <p className="muted">
-          Nhân viên chọn số người trước, hệ thống đề xuất phòng vừa sức và còn trống.
-          Ai đặt trước — giữ phòng.
-        </p>
-      </section>
       <form className="card login-card" onSubmit={onSubmit}>
-        <h2>Đăng nhập</h2>
+        <div className="login-brand">
+          <span className="brand-mark">R</span>
+          <strong className="font-brand">RoomFlow</strong>
+        </div>
+        <h1>Đăng nhập</h1>
+        <p className="muted">Đặt phòng họp DAOUKIWOOM</p>
         <label>
           Email
-          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            type="email"
+            name="email"
+            required
+            autoComplete="username"
+            spellCheck={false}
+          />
         </label>
         <label>
           Mật khẩu
-          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            type="password"
+            name="password"
+            required
+            autoComplete="current-password"
+          />
         </label>
         {error ? <p className="error">{error}</p> : null}
         <button className="btn primary" disabled={loading} type="submit">
